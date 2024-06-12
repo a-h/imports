@@ -3,6 +3,7 @@ package imports
 import (
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 
 	"go/ast"
@@ -16,13 +17,13 @@ import (
 
 var fset = token.NewFileSet()
 
-func applyPrefix(pkg parser.Package, existingImports []*ast.ImportSpec, src string) string {
+func applyPrefix(pkg parser.Package, existingImportsMap map[string]*ast.ImportSpec, src string) string {
 	var sb strings.Builder
 	// package xxx
 	sb.WriteString(pkg.Expression.Value)
 	sb.WriteString("\n")
 	// import "fmt"
-	for _, imp := range existingImports {
+	for _, imp := range existingImportsMap {
 		sb.WriteString("import ")
 		sb.WriteString(imp.Path.Value)
 		sb.WriteString("\n")
@@ -32,34 +33,52 @@ func applyPrefix(pkg parser.Package, existingImports []*ast.ImportSpec, src stri
 	return sb.String()
 }
 
-func getImports(pkg parser.Package, existingImports []*ast.ImportSpec, name, src string) (imports []*ast.ImportSpec, err error) {
-	gofile, err := goparser.ParseFile(fset, name, applyPrefix(pkg, existingImports, src), goparser.ImportsOnly)
+func getImports(pkg parser.Package, existingImportsMap map[string]*ast.ImportSpec, name, src string) (err error) {
+	gofile, err := goparser.ParseFile(fset, name, applyPrefix(pkg, existingImportsMap, src), goparser.ImportsOnly)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse imports: %w", err)
+		return fmt.Errorf("failed to parse imports: %w", err)
 	}
-	return gofile.Imports, nil
+	addImportsToMap(gofile.Imports, existingImportsMap)
+	return nil
 }
 
-func applyAutoImports(pkg parser.Package, existingImports []*ast.ImportSpec, name, src string) (string, error) {
-	updated, err := imports.Process(name, []byte(applyPrefix(pkg, existingImports, src)), nil)
+func applyAutoImports(pkg parser.Package, existingImportsMap map[string]*ast.ImportSpec, name, src string) (string, error) {
+	updated, err := imports.Process(name, []byte(applyPrefix(pkg, existingImportsMap, src)), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to process go code %q: %w", src, err)
 	}
 	return string(updated), nil
 }
 
-func updateImports(pkg parser.Package, existingImports []*ast.ImportSpec, name, src string) ([]*ast.ImportSpec, error) {
+func getImportSpecName(imp *ast.ImportSpec) string {
+	if imp.Name == nil {
+		return imp.Path.Value
+	}
+	return imp.Name.Name + " " + imp.Path.Value
+}
+
+func addImportsToMap(imports []*ast.ImportSpec, existingImportsMap map[string]*ast.ImportSpec) {
+	if existingImportsMap == nil {
+		existingImportsMap = make(map[string]*ast.ImportSpec)
+	}
+	for _, imp := range imports {
+		existingImportsMap[getImportSpecName(imp)] = imp
+	}
+}
+
+func updateImports(pkg parser.Package, existingImportsMap map[string]*ast.ImportSpec, name, src string) error {
 	// Apply auto imports.
-	updatedGoCode, err := applyAutoImports(pkg, existingImports, name, src)
+	updatedGoCode, err := applyAutoImports(pkg, existingImportsMap, name, src)
 	if err != nil {
-		return existingImports, fmt.Errorf("failed to apply imports to expression: %w", err)
+		return fmt.Errorf("failed to apply imports to expression: %w", err)
 	}
 	// Get updated imports.
 	gofile, err := goparser.ParseFile(fset, name, updatedGoCode, goparser.ImportsOnly)
 	if err != nil {
-		return existingImports, fmt.Errorf("failed to get imports from updated go code: %w", err)
+		return fmt.Errorf("failed to get imports from updated go code: %w", err)
 	}
-	return gofile.Imports, nil
+	addImportsToMap(gofile.Imports, existingImportsMap)
+	return nil
 }
 
 func getSourceCodeForNode(n parser.Node) (src string, ok bool) {
@@ -111,7 +130,8 @@ func Process(dir string, src string) (t parser.TemplateFile, err error) {
 
 	// Find all existing imports.
 	importsNode := t.Nodes[0].(parser.TemplateFileGoExpression)
-	allImports, err := getImports(t.Package, nil, fileName, importsNode.Expression.Value)
+	allImports := make(map[string]*ast.ImportSpec)
+	err = getImports(t.Package, nil, fileName, importsNode.Expression.Value)
 
 	// Find all the imports in the Go code.
 	// There may be Go code at the TemplateFileLevel.
@@ -120,7 +140,7 @@ func Process(dir string, src string) (t parser.TemplateFile, err error) {
 		if !ok {
 			continue
 		}
-		allImports, err = updateImports(t.Package, allImports, fileName, header.Expression.Value)
+		err = updateImports(t.Package, allImports, fileName, header.Expression.Value)
 		if err != nil {
 			return t, fmt.Errorf("failed to get imports from go code at %v: %w", header.Expression.Range, err)
 		}
@@ -135,7 +155,7 @@ func Process(dir string, src string) (t parser.TemplateFile, err error) {
 			return true
 		}
 
-		allImports, err = updateImports(t.Package, allImports, fileName, src)
+		err = updateImports(t.Package, allImports, fileName, src)
 		if err != nil {
 			perr = fmt.Errorf("failed to get imports from go code: %w", err)
 			return false
@@ -160,7 +180,8 @@ func Process(dir string, src string) (t parser.TemplateFile, err error) {
 		return t, fmt.Errorf("failed to parse imports section: %w", err)
 	}
 	gofile.Imports = nil
-	for _, pkg := range allImports {
+	for _, key := range getSortedMapKeys(allImports) {
+		pkg := allImports[key]
 		gofile.Imports = append(gofile.Imports, pkg)
 		newImportDecl := &ast.GenDecl{
 			Tok:   token.IMPORT,
@@ -178,6 +199,21 @@ func Process(dir string, src string) (t parser.TemplateFile, err error) {
 	t.Nodes[0] = importsNode
 
 	return t, nil
+}
+
+func getSortedMapKeys(m map[string]*ast.ImportSpec) []string {
+	if m == nil {
+		return nil
+	}
+	keys := make([]string, len(m))
+	var i int
+	for k := range m {
+		keys[i] = k
+		i++
+	}
+	slices.Sort(keys)
+	slices.Reverse(keys)
+	return keys
 }
 
 func walkTemplate(t parser.TemplateFile, f func(parser.Node) bool) {
