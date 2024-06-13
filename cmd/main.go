@@ -31,6 +31,8 @@ func run(dir, src string) error {
 	if err := tf.Write(actual); err != nil {
 		return fmt.Errorf("failed to write template file: %w", err)
 	}
-	io.Copy(os.Stdout, strings.NewReader(actual.String()))
+	if _, err = io.Copy(os.Stdout, strings.NewReader(actual.String())); err != nil {
+		return fmt.Errorf("failed to write to stdout: %w", err)
+	}
 	return nil
 }

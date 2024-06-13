@@ -9,8 +9,15 @@ templ Hello(name string) {
 -- fmt.templ --
 package test
 
-import "fmt"
-import "strconv"
+import (
+	"bytes"
+	"context"
+	"fmt"
+
+	"github.com/a-h/templ"
+	"io"
+	"strconv"
+)
 
 templ Hello(name string) {
 	<div id={ strconv.Atoi("123") }>
