@@ -21,14 +21,6 @@ import (
 
 var fset = token.NewFileSet()
 
-func getImports(name, src string) (imports []*ast.ImportSpec, err error) {
-	gofile, err := goparser.ParseFile(fset, name, src, goparser.ImportsOnly)
-	if err != nil {
-		return imports, fmt.Errorf("failed to parse imports: %w", err)
-	}
-	return gofile.Imports, nil
-}
-
 func updateImports(name, src string) (updated []*ast.ImportSpec, err error) {
 	// Apply auto imports.
 	updatedGoCode, err := imports.Process(name, []byte(src), nil)
@@ -62,10 +54,6 @@ func Process(dir string, src string) (t parser.TemplateFile, err error) {
 
 	// Find all existing imports.
 	importsNode := t.Nodes[0].(parser.TemplateFileGoExpression)
-	existingImports, err := getImports(fileName, t.Package.Expression.Value+"\n"+importsNode.Expression.Value)
-	if err != nil {
-		return t, fmt.Errorf("failed to get imports from existing go code at %v: %w", importsNode.Expression.Range, err)
-	}
 
 	// Generate code.
 	gw := bytes.NewBuffer(nil)
@@ -77,11 +65,6 @@ func Process(dir string, src string) (t parser.TemplateFile, err error) {
 	updatedImports, err := updateImports(fileName, gw.String())
 	if err != nil {
 		return t, fmt.Errorf("failed to get imports from generated go code: %w", err)
-	}
-
-	// Quit early if there are no imports to add or remove.
-	if len(existingImports) == 0 && len(updatedImports) == 0 {
-		return t, nil
 	}
 
 	// Update the template with the imports.
