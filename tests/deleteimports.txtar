@@ -1,0 +1,22 @@
+-- fmt.templ --
+package test
+
+import "strconv"
+
+templ Hello() {
+	<div>Hello</div>
+}
+-- fmt.templ --
+package test
+
+import (
+	"bytes"
+	"context"
+
+	"github.com/a-h/templ"
+	"io"
+)
+
+templ Hello() {
+	<div>Hello</div>
+}

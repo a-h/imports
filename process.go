@@ -82,6 +82,16 @@ func Process(dir string, src string) (t parser.TemplateFile, err error) {
 		Tok:   token.IMPORT,
 		Specs: convertSlice(updatedImports),
 	}
+	// Delete all the existing imports.
+	var indicesToDelete []int
+	for i, decl := range gofile.Decls {
+		if decl, ok := decl.(*ast.GenDecl); ok && decl.Tok == token.IMPORT {
+			indicesToDelete = append(indicesToDelete, i)
+		}
+	}
+	for i := len(indicesToDelete) - 1; i >= 0; i-- {
+		gofile.Decls = append(gofile.Decls[:indicesToDelete[i]], gofile.Decls[indicesToDelete[i]+1:]...)
+	}
 	gofile.Decls = append([]ast.Decl{newImportDecl}, gofile.Decls...)
 	// Write out the Go code with the imports.
 	updatedGoCode := new(strings.Builder)
